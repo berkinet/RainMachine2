@@ -28,6 +28,10 @@ try:
 except ImportError:
     raise ImportError("'Required Python libraries missing.  Run 'pip3 install regenmaschine' in Terminal window, then reload plugin. Xcode install is also required!")
 
+POLL_INTERVAL_DEFAULT = 60
+POLL_INTERVAL_MINIMUM = 10
+POLL_INTERVAL_MAXIMUM = 3600
+
 
 ################################################################################
 class Plugin(indigo.PluginBase):
@@ -51,11 +55,52 @@ class Plugin(indigo.PluginBase):
         self.debugLog(u"startup called")
         indigo.server.log("startup called")
         self.controllers = self.client.controllers
+        self.logger.info(
+            "Polling RainMachine every {} seconds".format(
+                self._poll_interval()
+            )
+        )
 
 ################################################################################
     def shutdown(self):
         self.debugLog(u"shutdown called")
         indigo.server.log("shutdown called")
+
+################################################################################
+    def validatePrefsConfigUi(self, valuesDict):
+        try:
+            poll_interval = int(valuesDict.get(
+                "pollInterval", POLL_INTERVAL_DEFAULT
+            ))
+        except (TypeError, ValueError):
+            poll_interval = 0
+
+        if not POLL_INTERVAL_MINIMUM <= poll_interval <= POLL_INTERVAL_MAXIMUM:
+            errors = indigo.Dict()
+            errors["pollInterval"] = (
+                "Enter a polling interval from {} to {} seconds.".format(
+                    POLL_INTERVAL_MINIMUM,
+                    POLL_INTERVAL_MAXIMUM,
+                )
+            )
+            errors["showAlertText"] = errors["pollInterval"]
+            return False, valuesDict, errors
+
+        valuesDict["pollInterval"] = str(poll_interval)
+        return True, valuesDict
+
+################################################################################
+    def _poll_interval(self):
+        try:
+            value = int(self.pluginPrefs.get(
+                "pollInterval", POLL_INTERVAL_DEFAULT
+            ))
+        except (TypeError, ValueError):
+            return POLL_INTERVAL_DEFAULT
+        return max(
+            POLL_INTERVAL_MINIMUM,
+            min(POLL_INTERVAL_MAXIMUM, value),
+        )
 
 ################################################################################
     def deviceStartComm(self, device):
@@ -189,7 +234,9 @@ class Plugin(indigo.PluginBase):
                 else:
                     pass
 
-            self.next_update_programs = time.time() + 60
+            self.next_update_programs = (
+                time.time() + self._poll_interval()
+            )
 
 ################################################################################
     def runConcurrentThread(self):

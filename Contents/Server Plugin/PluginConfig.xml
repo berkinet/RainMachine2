@@ -1,0 +1,8 @@
+<?xml version="1.0"?>
+<PluginConfig>
+    <SupportURL>https://github.com/berkinet/RainMachine2</SupportURL>
+    <Field id="pollInterval" type="textfield" defaultValue="60">
+        <Label>Polling Interval:</Label>
+        <Description>Seconds between RainMachine status updates (10-3600)</Description>
+    </Field>
+</PluginConfig>
