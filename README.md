@@ -23,6 +23,13 @@ Enter password and hit login<br>
 If successful, you should see a list of RainMachine devices to chose from<br>
 Once selected hit save<br>
 
+Plugin Configuration:<br>
+Use Plugins -> RainMachine2 -> Configure to set the polling interval. The
+default is 60 seconds and the supported range is 10 to 3600 seconds. A
+10-second interval provides more responsive active-zone and remaining-time
+updates while retaining the original 60-second behavior for existing
+installations.<br>
+
 You can create either triggers or schedules to start a program, stop a program, start a zone, stop a zone or stop all watering<br>
 Ceate a new trigger/schedule with whatever constraints you want for it to run<br>
 Under the third tab "Actions", select "Device Actions", select RainMachine2 Controls<br>
@@ -32,6 +39,5 @@ In the details, if you have a flowmeter installed and enabled, it will count the
 To setup the flow meter you need to use the web interface of the local rainmachine or the cloud based one to enable and set clicks per gallon.<br>
 
 Please don't ask for further features to setup the rainmachine device, change names of zones, list the prior watering, etc. This is already well implemented in the webapp, phone app and on the machine itself. This plugin is just designed to allow you to trigger/schedule starting and stoping of programs and zones from Indigo. If you want more info, go to the device or login to the web interface of the device.<br>
-
 
 
