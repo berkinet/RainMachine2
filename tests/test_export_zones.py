@@ -38,6 +38,10 @@ class ExportZoneTests(unittest.TestCase):
             "Zone\tName\n1\tPool Lawn\n2\tBelow Pool\n",
         )
 
+    def test_parser_requires_only_the_controller_host(self):
+        args = export_zones._parser().parse_args(["192.0.2.1"])
+        self.assertEqual(args.host, "192.0.2.1")
+
 
 if __name__ == "__main__":
     unittest.main()
