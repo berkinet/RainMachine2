@@ -8,7 +8,6 @@ import asyncio
 import getpass
 import os
 import sys
-from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 
@@ -81,13 +80,6 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("host", help="RainMachine IP address or hostname")
     parser.add_argument(
-        "-o",
-        "--output",
-        default="rainmachine-zones.txt",
-        help="output filename, or '-' for standard output "
-        "(default: rainmachine-zones.txt)",
-    )
-    parser.add_argument(
         "--port",
         type=int,
         help="override the regenmaschine default port",
@@ -125,12 +117,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         )
         output = _render_tsv(rows)
-        if args.output == "-":
-            sys.stdout.write(output)
-        else:
-            path = Path(args.output).expanduser()
-            path.write_text(output, encoding="utf-8")
-            print(f"Wrote {len(rows)} zones to {path}", file=sys.stderr)
+        sys.stdout.write(output)
     except (OSError, RuntimeError, ValueError) as error:
         print(f"Error: {error}", file=sys.stderr)
         return 1

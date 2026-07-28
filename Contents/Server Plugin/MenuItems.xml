@@ -8,4 +8,8 @@
 		<Name>Update Devices</Name>
         <CallbackMethod>update</CallbackMethod>
 	</MenuItem>
+	<MenuItem id="exportZones">
+		<Name>Export Zone List</Name>
+        <CallbackMethod>exportZoneList</CallbackMethod>
+	</MenuItem>
 </MenuItems>

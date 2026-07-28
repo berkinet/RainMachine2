@@ -371,6 +371,52 @@ class Plugin(indigo.PluginBase):
     def menuChanged(self, valuesDict, typeId, devId):
         return valuesDict
 
+################################################################################
+    def exportZoneList(self):
+        if not self.controllers:
+            indigo.server.log(
+                "No connected RainMachine controllers are available.",
+                isError=True,
+            )
+            return
+
+        for controller in sorted(
+            self.controllers.values(),
+            key=lambda value: str(getattr(value, "name", "")),
+        ):
+            try:
+                zones = asyncio.run(controller.zones.all())
+            except Exception as error:
+                indigo.server.log(
+                    "Unable to export RainMachine zones: {}".format(error),
+                    isError=True,
+                )
+                continue
+
+            controller_name = (
+                getattr(controller, "name", None)
+                or getattr(controller, "mac", "RainMachine")
+            )
+            lines = [
+                "RainMachine zone list for {}:".format(controller_name),
+                "Zone\tName",
+            ]
+            for zone_id, zone in sorted(
+                zones.items(),
+                key=self._zoneSortKey,
+            ):
+                zone_name = " ".join(str(zone.get("name", "")).split())
+                lines.append("{}\t{}".format(zone_id, zone_name))
+            indigo.server.log("\n".join(lines))
+
+################################################################################
+    @staticmethod
+    def _zoneSortKey(item):
+        try:
+            return 0, int(item[0])
+        except (TypeError, ValueError):
+            return 1, str(item[0])
+
     ######################
     #  Update functions  #
     ######################
