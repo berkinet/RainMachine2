@@ -30,6 +30,16 @@ default is 60 seconds and the supported range is 10 to 3600 seconds. A
 updates while retaining the original 60-second behavior for existing
 installations.<br>
 
+One-time zone list export:<br>
+The repository includes `tools/export_zones.py`, which connects directly to a
+local RainMachine and writes a tab-separated list containing each zone number
+and name. The password is requested securely and is not placed on the command
+line.<br>
+Run `python3 tools/export_zones.py RAINMACHINE_IP` to create
+`rainmachine-zones.txt` in the current directory. Use `-o -` to print the list
+to the terminal, or `-o filename.txt` to select another file. The tool uses the
+same `aiohttp` and `regenmaschine` packages required by the plugin.<br>
+
 You can create either triggers or schedules to start a program, stop a program, start a zone, stop a zone or stop all watering<br>
 Ceate a new trigger/schedule with whatever constraints you want for it to run<br>
 Under the third tab "Actions", select "Device Actions", select RainMachine2 Controls<br>
@@ -39,5 +49,4 @@ In the details, if you have a flowmeter installed and enabled, it will count the
 To setup the flow meter you need to use the web interface of the local rainmachine or the cloud based one to enable and set clicks per gallon.<br>
 
 Please don't ask for further features to setup the rainmachine device, change names of zones, list the prior watering, etc. This is already well implemented in the webapp, phone app and on the machine itself. This plugin is just designed to allow you to trigger/schedule starting and stoping of programs and zones from Indigo. If you want more info, go to the device or login to the web interface of the device.<br>
-
 
