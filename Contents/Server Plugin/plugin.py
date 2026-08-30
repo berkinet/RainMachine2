@@ -24,6 +24,7 @@ except ImportError:
 from aiohttp import ClientSession
 try:
     from regenmaschine import Client
+    from regenmaschine.errors import RequestError
     import asyncio
 except ImportError:
     raise ImportError("'Required Python libraries missing.  Run 'pip3 install regenmaschine' in Terminal window, then reload plugin. Xcode install is also required!")
@@ -45,6 +46,7 @@ class Plugin(indigo.PluginBase):
         self.next_update_programs = time.time()
         self.update_queue = []
         self.controllers = {}
+        self._communication_failures = {}
 
 ################################################################################
     def __del__(self):
@@ -155,98 +157,149 @@ class Plugin(indigo.PluginBase):
             device.updateStateImageOnServer(indigo.kStateImageSel.SensorTripped)
             device.updateStateOnServer('device_online', value=False, clearErrorState=True)
             del self.rainmachine_devices[device.id]
+        self._communication_failures.pop(device.id, None)
+
+################################################################################
+    def _communicationFailed(self, device, error):
+        message = str(error).strip()
+        if device.id not in self._communication_failures:
+            self.logger.error(
+                "RainMachine temporarily unavailable: device='{}' id={}: {}".format(
+                    device.name,
+                    device.id,
+                    message,
+                )
+            )
+        self._communication_failures[device.id] = message
+        device.updateStateImageOnServer(indigo.kStateImageSel.SensorTripped)
+        device.updateStateOnServer('device_online', value=False)
+        device.setErrorStateOnServer("Communication failed")
+
+################################################################################
+    def _communicationRecovered(self, device):
+        previous_error = self._communication_failures.pop(device.id, None)
+        if previous_error is not None:
+            self.logger.info(
+                "RainMachine recovered: device='{}' id={}".format(
+                    device.name,
+                    device.id,
+                )
+            )
+        device.updateStateOnServer(
+            'device_online', value=True, clearErrorState=True
+        )
+
+################################################################################
+    def _publishControllerStatus(self, device, zone_data, program_data,
+                                 flowmeter_data=None):
+        active_zones = [zone for zone in zone_data if zone[u'state'] != 0]
+        if active_zones:
+            zone = active_zones[-1]
+            minutes_left = int(round(zone[u'remaining'] / 60))
+            device.updateStateOnServer(
+                'current_zone', zone[u'name'], clearErrorState=True
+            )
+            device.updateStateOnServer(
+                'minutes_left', minutes_left,
+                uiValue=str(minutes_left) + " min", clearErrorState=True
+            )
+            device.updateStateOnServer(
+                'active_watering', 'on', clearErrorState=True
+            )
+            device.updateStateImageOnServer(indigo.kStateImageSel.SprinklerOn)
+        else:
+            device.updateStateOnServer(
+                'current_zone', 'all off', clearErrorState=True
+            )
+            device.updateStateOnServer(
+                'minutes_left', 0, uiValue='0 min', clearErrorState=True
+            )
+            device.updateStateOnServer(
+                'active_watering', 'off', clearErrorState=True
+            )
+            device.updateStateImageOnServer(indigo.kStateImageSel.SensorOn)
+
+        named_programs = [
+            program for program in program_data
+            if program.get('name') is not None
+        ]
+        device.updateStateOnServer(
+            'current_program',
+            named_programs[-1]['name'] if named_programs else 'none',
+            clearErrorState=True,
+        )
+
+        if flowmeter_data:
+            gallons = (
+                flowmeter_data['flowMeterWateringClicks'] +
+                flowmeter_data['flowMeterLeakClicks']
+            )
+            device.updateStateOnServer(
+                'flowmeter', '{} gal'.format(gallons), clearErrorState=True
+            )
+
+################################################################################
+    async def _refreshController(self, deviceId, include_flowmeter=True):
+        device = indigo.devices[deviceId]
+        try:
+            zone_data = await self.activeZone(deviceId)
+            program_data = await self.activeProgram(deviceId)
+            flowmeter_data = (
+                await self.flowmeter(deviceId) if include_flowmeter else None
+            )
+        except RequestError as error:
+            self._communicationFailed(device, error)
+            return False
+
+        self._publishControllerStatus(
+            device, zone_data, program_data, flowmeter_data
+        )
+        self._communicationRecovered(device)
+        return True
 
 ################################################################################
     async def update(self):
-
         self.logger.debug("Update Called")
+        had_failure = False
+        refreshed_devices = set()
         if self.update_queue:
             self.debugLog("queue has update")
             deviceId = int(self.update_queue.pop(0))
             self.debugLog("device id:" + str(deviceId))
-
-            device = indigo.devices[deviceId]
-            zone_data = await self.activeZone(deviceId)
-            self.debugLog("device to update" + str(zone_data))
-            counter = 0
-            for kd in zone_data: # for kd in zone_data[u'zones']:
-                if kd[u'state'] != 0:
-                    self.debugLog("zone {} is on for {} seconds".format(kd[u'name'], (kd[u'remaining'])))
-                    device.updateStateOnServer('current_zone', kd[u'name'], clearErrorState=True)
-                    device.updateStateOnServer('minutes_left', int(round(kd[u'remaining'] / 60)),
-                                               uiValue=str(int(round(kd[u'remaining'] / 60))) + " min",
-                                               clearErrorState=True)
-                    device.updateStateOnServer('active_watering', 'on', clearErrorState=True)
-                    device.updateStateImageOnServer(indigo.kStateImageSel.SprinklerOn)
-                    counter += 1
-            if counter == 0:
-                self.debugLog("no active zones")
-                device.updateStateOnServer('current_zone', 'all off', clearErrorState=True)
-                device.updateStateOnServer('minutes_left', 0, uiValue='0 min', clearErrorState=True)
-                device.updateStateOnServer('active_watering', 'off', clearErrorState=True)
-                device.updateStateImageOnServer(indigo.kStateImageSel.SensorOn)
-
-            program_data = await self.activeProgram(deviceId)
-            if program_data and program_data[0]['name'] != None:
-                self.debugLog("program data : " + str(program_data))
-                self.debugLog("program data available")
-                for kd in program_data:  # for kd in program_data[u'programs']:
-                    device.updateStateOnServer('current_program', kd['name'], clearErrorState=True)
-            else:
-                device.updateStateOnServer('current_program', 'none', clearErrorState=True)
-                self.debugLog("program data should be none")
+            refreshed_devices.add(deviceId)
+            if not await self._refreshController(
+                    deviceId, include_flowmeter=False):
+                had_failure = True
 
         if time.time() > self.next_update_programs:
-            counter = 0
-            for key, value in self.rainmachine_devices.items():
-                deviceId = key
-                device = indigo.devices[deviceId]
-                zone_data = await self.activeZone(deviceId)
-                for kd in zone_data: # for kd in zone_data[u'zones']:
-                    if kd[u'state'] != 0:
-                        #self.debugLog("zone {} is on for {} seconds".format(kd[u'name'], (kd[u'remaining'])))
-                        device.updateStateOnServer('current_zone', kd[u'name'], clearErrorState=True)
-                        device.updateStateOnServer('minutes_left', round(kd[u'remaining'] / 60),
-                                                   uiValue = str(int(round(kd[u'remaining'] / 60))) + " min",
-                                                   clearErrorState = True)
-                        device.updateStateOnServer('active_watering', 'on', clearErrorState=True)
-                        device.updateStateImageOnServer(indigo.kStateImageSel.SprinklerOn)
-                        counter += 1
-                if counter == 0:
-                    device.updateStateOnServer('current_zone', 'all off', clearErrorState=True)
-                    device.updateStateOnServer('minutes_left', 0, uiValue='0 min', clearErrorState=True)
-                    device.updateStateOnServer('active_watering', 'off', clearErrorState=True)
-                    device.updateStateImageOnServer(indigo.kStateImageSel.SensorOn)
-
-                program_data = await self.activeProgram(deviceId)
-                if program_data and program_data[0]['name'] != None:
-                    self.debugLog("program data : " + str(program_data))
-                    for kd in program_data: #for kd in program_data[u'programs']:
-                        device.updateStateOnServer('current_program', kd['name'], clearErrorState=True)
-                else:
-                    device.updateStateOnServer('current_program', 'none', clearErrorState=True)
-                    self.debugLog("program data should be none: " + str(program_data))
-
-                flowmeter_data = await self.flowmeter(deviceId)
-                if flowmeter_data:
-                    self.debugLog("flowmeter data : " + str(flowmeter_data))
-                    device.updateStateOnServer('flowmeter', (str(flowmeter_data['flowMeterWateringClicks']+flowmeter_data['flowMeterLeakClicks'])+' gal'), clearErrorState=True)
-                else:
-                    pass
-
-            self.next_update_programs = (
-                time.time() + self._poll_interval()
+            for deviceId in list(self.rainmachine_devices):
+                if deviceId in refreshed_devices:
+                    continue
+                if not await self._refreshController(deviceId):
+                    had_failure = True
+            retry_interval = 10 if had_failure else self._poll_interval()
+            self.next_update_programs = time.time() + retry_interval
+        elif had_failure:
+            self.next_update_programs = min(
+                self.next_update_programs, time.time() + 10
             )
+
+        return not had_failure
 
 ################################################################################
     def runConcurrentThread(self):
         self.logger.debug(u"runConcurrentThread starting")
         try:
             while True:
-
-                if time.time() > self.next_update_programs:
-                    asyncio.run(self.update())
-
+                try:
+                    if time.time() > self.next_update_programs:
+                        asyncio.run(self.update())
+                except Exception:
+                    self.logger.exception(
+                        "Unexpected RainMachine polling failure; retrying in "
+                        "10 seconds"
+                    )
+                    self.next_update_programs = time.time() + 10
                 self.sleep(10.0)
 
         except self.StopThread:

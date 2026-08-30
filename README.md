@@ -1,6 +1,14 @@
 # RainMachine2
 Indigo plugin for Rain Machine
 
+## Version 1.0.3
+
+Transient RainMachine API timeouts no longer terminate Indigo's concurrent
+plugin thread. The affected controller is marked temporarily unavailable while
+its last-known watering and program states are preserved. The plugin logs one
+concise error, retries after 10 seconds, and logs once when communication
+recovers.
+
 Rain Machine Plugin has been developed for Indigo Home Automation version 2022.1 and hopefully beyond. It uses python3<br>
 
 Installation Instructions:<br>

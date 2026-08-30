@@ -1,4 +1,5 @@
 import importlib.util
+import asyncio
 import logging
 import plistlib
 import sys
@@ -7,7 +8,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,11 +23,18 @@ class PluginBase:
     def __del__(self):
         pass
 
+    def debugLog(self, message):
+        pass
+
 
 indigo = ModuleType("indigo")
 indigo.PluginBase = PluginBase
 indigo.Dict = dict
 indigo.server = SimpleNamespace(log=MagicMock())
+indigo.kStateImageSel = SimpleNamespace(
+    SensorTripped="tripped", SensorOn="on", SprinklerOn="sprinkler"
+)
+indigo.devices = {}
 sys.modules["indigo"] = indigo
 
 aiohttp = ModuleType("aiohttp")
@@ -42,6 +50,15 @@ class Client:
 regenmaschine = ModuleType("regenmaschine")
 regenmaschine.Client = Client
 sys.modules["regenmaschine"] = regenmaschine
+regenmaschine_errors = ModuleType("regenmaschine.errors")
+
+
+class RequestError(Exception):
+    pass
+
+
+regenmaschine_errors.RequestError = RequestError
+sys.modules["regenmaschine.errors"] = regenmaschine_errors
 
 spec = importlib.util.spec_from_file_location(
     "rainmachine2_plugin", SERVER / "plugin.py"
@@ -53,7 +70,7 @@ spec.loader.exec_module(plugin_module)
 class PollingTests(unittest.TestCase):
     def make_plugin(self, prefs):
         return plugin_module.Plugin(
-            "plugin.id", "RainMachine2", "1.0.2", prefs
+            "plugin.id", "RainMachine2", "1.0.3", prefs
         )
 
     def test_poll_interval_defaults_to_sixty_seconds(self):
@@ -94,7 +111,7 @@ class PollingTests(unittest.TestCase):
     def test_bundle_metadata_and_configuration(self):
         with (ROOT / "Contents" / "Info.plist").open("rb") as stream:
             info = plistlib.load(stream)
-        self.assertEqual(info["PluginVersion"], "1.0.2")
+        self.assertEqual(info["PluginVersion"], "1.0.3")
 
         config = ET.parse(SERVER / "PluginConfig.xml").getroot()
         field = config.find("./Field[@id='pollInterval']")
@@ -114,7 +131,7 @@ class PollingTests(unittest.TestCase):
             packaged_menu = ET.fromstring(
                 archive.read(prefix + "Server Plugin/MenuItems.xml")
             )
-        self.assertEqual(packaged_info["PluginVersion"], "1.0.2")
+        self.assertEqual(packaged_info["PluginVersion"], "1.0.3")
         self.assertIsNotNone(
             packaged_config.find("./Field[@id='pollInterval']")
         )
@@ -161,6 +178,115 @@ class PollingTests(unittest.TestCase):
             "2\tBelow Pool\n"
             "10\tPool Refill"
         )
+
+    @staticmethod
+    def controller(zones=None, programs=None, flowmeter=None):
+        return SimpleNamespace(
+            zones=SimpleNamespace(running=AsyncMock(
+                return_value=[] if zones is None else zones)),
+            programs=SimpleNamespace(running=AsyncMock(
+                return_value=[] if programs is None else programs)),
+            watering=SimpleNamespace(flowmeter=AsyncMock(
+                return_value=flowmeter)),
+        )
+
+    @staticmethod
+    def device(device_id=7):
+        device = SimpleNamespace(
+            id=device_id,
+            name="Garden controller",
+            pluginProps={"deviceMAC": "controller"},
+            updateStateOnServer=MagicMock(),
+            updateStateImageOnServer=MagicMock(),
+            setErrorStateOnServer=MagicMock(),
+        )
+        indigo.devices[device_id] = device
+        return device
+
+    def test_request_timeout_is_logged_once_and_preserves_status_states(self):
+        plugin = self.make_plugin({})
+        device = self.device()
+        controller = self.controller()
+        controller.zones.running.side_effect = RequestError(
+            "Timed out while requesting zone data"
+        )
+        plugin.controllers = {"controller": controller}
+        plugin.logger = MagicMock()
+
+        first = asyncio.run(plugin._refreshController(device.id))
+        second = asyncio.run(plugin._refreshController(device.id))
+
+        self.assertFalse(first)
+        self.assertFalse(second)
+        plugin.logger.error.assert_called_once_with(
+            "RainMachine temporarily unavailable: device='{}' id={}: {}".format(
+                device.name, device.id,
+                "Timed out while requesting zone data",
+            )
+        )
+        device.setErrorStateOnServer.assert_called_with("Communication failed")
+        updated_keys = [call.args[0]
+                        for call in device.updateStateOnServer.call_args_list]
+        self.assertEqual(updated_keys, ["device_online", "device_online"])
+
+    def test_successful_retry_publishes_status_and_logs_recovery_once(self):
+        plugin = self.make_plugin({})
+        device = self.device()
+        controller = self.controller(
+            zones=[{"state": 1, "name": "Orchard", "remaining": 125}],
+            programs=[{"name": "Morning"}],
+            flowmeter={
+                "flowMeterWateringClicks": 4,
+                "flowMeterLeakClicks": 1,
+            },
+        )
+        controller.zones.running.side_effect = RequestError("temporary timeout")
+        plugin.controllers = {"controller": controller}
+        plugin.logger = MagicMock()
+        asyncio.run(plugin._refreshController(device.id))
+        controller.zones.running.side_effect = None
+
+        recovered = asyncio.run(plugin._refreshController(device.id))
+        recovered_again = asyncio.run(plugin._refreshController(device.id))
+
+        self.assertTrue(recovered)
+        self.assertTrue(recovered_again)
+        plugin.logger.info.assert_called_once_with(
+            "RainMachine recovered: device='{}' id={}".format(
+                device.name, device.id
+            )
+        )
+        device.updateStateOnServer.assert_any_call(
+            "current_zone", "Orchard", clearErrorState=True
+        )
+        device.updateStateOnServer.assert_any_call(
+            "minutes_left", 2, uiValue="2 min", clearErrorState=True
+        )
+        device.updateStateOnServer.assert_any_call(
+            "current_program", "Morning", clearErrorState=True
+        )
+        device.updateStateOnServer.assert_any_call(
+            "flowmeter", "5 gal", clearErrorState=True
+        )
+        device.updateStateOnServer.assert_any_call(
+            "device_online", value=True, clearErrorState=True
+        )
+
+    def test_failed_periodic_poll_schedules_ten_second_retry(self):
+        plugin = self.make_plugin({"pollInterval": "60"})
+        device = self.device()
+        controller = self.controller()
+        controller.zones.running.side_effect = RequestError("timeout")
+        plugin.controllers = {"controller": controller}
+        plugin.rainmachine_devices = {device.id: "controller"}
+        plugin.next_update_programs = 0
+        plugin.logger = MagicMock()
+
+        with patch.object(plugin_module.time, "time", return_value=100.0):
+            successful = asyncio.run(plugin.update())
+
+        self.assertFalse(successful)
+        self.assertEqual(plugin.next_update_programs, 110.0)
 
 
 if __name__ == "__main__":
