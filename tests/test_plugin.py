@@ -43,7 +43,8 @@ sys.modules["aiohttp"] = aiohttp
 
 
 class Client:
-    def __init__(self):
+    def __init__(self, *, request_timeout=30):
+        self.request_timeout = request_timeout
         self.controllers = {}
 
 
@@ -70,7 +71,7 @@ spec.loader.exec_module(plugin_module)
 class PollingTests(unittest.TestCase):
     def make_plugin(self, prefs):
         return plugin_module.Plugin(
-            "plugin.id", "RainMachine2", "1.0.3", prefs
+            "plugin.id", "RainMachine2", "1.0.4", prefs
         )
 
     def test_poll_interval_defaults_to_sixty_seconds(self):
@@ -111,7 +112,7 @@ class PollingTests(unittest.TestCase):
     def test_bundle_metadata_and_configuration(self):
         with (ROOT / "Contents" / "Info.plist").open("rb") as stream:
             info = plistlib.load(stream)
-        self.assertEqual(info["PluginVersion"], "1.0.3")
+        self.assertEqual(info["PluginVersion"], "1.0.4")
 
         config = ET.parse(SERVER / "PluginConfig.xml").getroot()
         field = config.find("./Field[@id='pollInterval']")
@@ -131,7 +132,7 @@ class PollingTests(unittest.TestCase):
             packaged_menu = ET.fromstring(
                 archive.read(prefix + "Server Plugin/MenuItems.xml")
             )
-        self.assertEqual(packaged_info["PluginVersion"], "1.0.3")
+        self.assertEqual(packaged_info["PluginVersion"], "1.0.4")
         self.assertIsNotNone(
             packaged_config.find("./Field[@id='pollInterval']")
         )
@@ -271,6 +272,65 @@ class PollingTests(unittest.TestCase):
         device.updateStateOnServer.assert_any_call(
             "device_online", value=True, clearErrorState=True
         )
+
+    def test_notification_delay_suppresses_brief_outage_and_updates_state(self):
+        plugin = self.make_plugin({"lostDeviceNotificationDelay": "60"})
+        plugin.logger = MagicMock()
+        device = self.device()
+        with patch.object(plugin_module.time, "monotonic", return_value=100):
+            plugin._communicationFailed(device, RequestError("timeout"))
+        device.updateStateOnServer.assert_called_with("device_online", value=False)
+        device.setErrorStateOnServer.assert_called_with("Communication failed")
+        with patch.object(plugin_module.time, "monotonic", return_value=159):
+            plugin._communicationRecovered(device)
+            plugin._flushCommunicationNotifications()
+        plugin.logger.error.assert_not_called()
+        plugin.logger.info.assert_not_called()
+
+    def test_sustained_outage_logs_without_another_request_and_recovers_once(self):
+        plugin = self.make_plugin({"lostDeviceNotificationDelay": "60"})
+        plugin.logger = MagicMock()
+        device = self.device()
+        with patch.object(plugin_module.time, "monotonic", return_value=100):
+            plugin._communicationFailed(device, RequestError("timeout"))
+        with patch.object(plugin_module.time, "monotonic", return_value=160):
+            plugin._flushCommunicationNotifications()
+            plugin._communicationFailed(device, RequestError("another timeout"))
+            plugin._flushCommunicationNotifications()
+            plugin._communicationRecovered(device)
+            plugin._communicationRecovered(device)
+        plugin.logger.error.assert_called_once()
+        plugin.logger.info.assert_called_once()
+
+    def test_delay_changes_apply_to_pending_outage_and_stop_cancels_it(self):
+        plugin = self.make_plugin({"lostDeviceNotificationDelay": "60"})
+        plugin.logger = MagicMock()
+        device = self.device()
+        with patch.object(plugin_module.time, "monotonic", return_value=100):
+            plugin._communicationFailed(device, RequestError("timeout"))
+            plugin.pluginPrefs["lostDeviceNotificationDelay"] = "0"
+            plugin._flushCommunicationNotifications()
+        plugin.logger.error.assert_called_once()
+        plugin.rainmachine_devices[device.id] = "controller"
+        plugin.deviceStopComm(device)
+        plugin._flushCommunicationNotifications()
+        self.assertFalse(plugin._communication_failures)
+        plugin.logger.info.assert_not_called()
+
+    def test_timeout_and_notification_preferences(self):
+        plugin = self.make_plugin({"requestTimeout": "90"})
+        self.assertEqual(plugin.client.request_timeout, 90)
+        self.assertEqual(self.make_plugin({}).client.request_timeout, 30)
+        for key, values in (("requestTimeout", ("0", "301", "bad")),
+                            ("lostDeviceNotificationDelay", ("-1", "bad"))):
+            for value in values:
+                valid, _, errors = plugin.validatePrefsConfigUi({key: value})
+                self.assertFalse(valid)
+                self.assertIn(key, errors)
+        valid, prefs = plugin.validatePrefsConfigUi({
+            "requestTimeout": "90", "lostDeviceNotificationDelay": "60"})
+        self.assertTrue(valid)
+        self.assertEqual(prefs["requestTimeout"], "90")
 
     def test_failed_periodic_poll_schedules_ten_second_retry(self):
         plugin = self.make_plugin({"pollInterval": "60"})

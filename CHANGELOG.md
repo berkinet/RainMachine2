@@ -1,5 +1,15 @@
 # Release notes
 
+## 1.0.4 — 2026-11-11
+
+- Add configurable per-request timeout (1–300 seconds, default 30); plugin
+  restart required for timeout changes.
+- Add configurable lost device notification delay, defaulting to 0 seconds.
+- Suppress both unavailable and recovery logs for outages shorter than the delay.
+- Keep offline state updates immediate and log sustained outages independently
+  of the polling interval. Preference changes apply without a restart.
+
+
 ## 1.0.3 — 2026-08-30
 
 ### Fixed

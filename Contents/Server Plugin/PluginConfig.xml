@@ -5,4 +5,12 @@
         <Label>Polling Interval:</Label>
         <Description>Seconds between RainMachine status updates (10-3600)</Description>
     </Field>
+    <Field id="lostDeviceNotificationDelay" type="textfield" defaultValue="0">
+        <Label>Lost device notification delay (seconds):</Label>
+        <Description>Delay unavailable logging. Recovery within this period suppresses both messages. 0 logs immediately; for example, use 60 to suppress brief outages. Offline state updates remain immediate.</Description>
+    </Field>
+    <Field id="requestTimeout" type="textfield" defaultValue="30">
+        <Label>Request timeout (seconds):</Label>
+        <Description>Time allowed for each RainMachine API request (1-300; default 30). Restart the plugin after changing this setting.</Description>
+    </Field>
 </PluginConfig>

@@ -1,6 +1,21 @@
 # RainMachine2
 Indigo plugin for Rain Machine
 
+## Version 1.0.4
+
+Set **Lost device notification delay (seconds)** in plugin configuration to
+suppress brief unavailable/recovered log pairs (for example, `60` seconds).
+The default `0` logs immediately. Settings apply without restarting. Offline
+state updates and retries remain immediate; last-known watering states are
+preserved. Longer outages log one error and one recovery. Pending notifications
+are checked every 10 seconds, independently of the polling interval.
+
+**Request timeout (seconds)** controls how long each API request can take
+(1–300 seconds, default `30`). Restart the plugin after changing the timeout.
+Increasing it gives a slow controller more time to respond but can delay status
+updates for other controllers. The notification delay starts after a failure is
+detected, rather than when the request begins.
+
 ## Version 1.0.3
 
 Transient RainMachine API timeouts no longer terminate Indigo's concurrent

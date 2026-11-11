@@ -42,7 +42,7 @@ class Plugin(indigo.PluginBase):
         indigo.PluginBase.__init__(self, pluginId, pluginDisplayName, pluginVersion, pluginPrefs)
         self.debug = False
         self.rainmachine_devices = {}
-        self.client = Client()
+        self.client = Client(request_timeout=self._request_timeout())
         self.next_update_programs = time.time()
         self.update_queue = []
         self.controllers = {}
@@ -88,6 +88,28 @@ class Plugin(indigo.PluginBase):
             errors["showAlertText"] = errors["pollInterval"]
             return False, valuesDict, errors
 
+        try:
+            delay = int(valuesDict.get("lostDeviceNotificationDelay", 0))
+            if delay < 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            errors = indigo.Dict()
+            errors["lostDeviceNotificationDelay"] = "Enter a non-negative number of seconds."
+            errors["showAlertText"] = errors["lostDeviceNotificationDelay"]
+            return False, valuesDict, errors
+
+        try:
+            timeout = int(valuesDict.get("requestTimeout", 30))
+            if not 1 <= timeout <= 300:
+                raise ValueError
+        except (TypeError, ValueError):
+            errors = indigo.Dict()
+            errors["requestTimeout"] = "Enter a request timeout from 1 to 300 seconds."
+            errors["showAlertText"] = errors["requestTimeout"]
+            return False, valuesDict, errors
+
+        valuesDict["requestTimeout"] = str(timeout)
+        valuesDict["lostDeviceNotificationDelay"] = str(delay)
         valuesDict["pollInterval"] = str(poll_interval)
         return True, valuesDict
 
@@ -160,31 +182,57 @@ class Plugin(indigo.PluginBase):
         self._communication_failures.pop(device.id, None)
 
 ################################################################################
-    def _communicationFailed(self, device, error):
-        message = str(error).strip()
-        if device.id not in self._communication_failures:
+    def _request_timeout(self):
+        try:
+            return max(1, min(300, int(self.pluginPrefs.get("requestTimeout", 30))))
+        except (TypeError, ValueError):
+            return 30
+
+    def _notification_delay(self):
+        try:
+            return max(0, int(self.pluginPrefs.get("lostDeviceNotificationDelay", 0)))
+        except (TypeError, ValueError):
+            return 0
+
+    def _logCommunicationFailure(self, device, failure):
+        if not failure["logged"]:
             self.logger.error(
                 "RainMachine temporarily unavailable: device='{}' id={}: {}".format(
-                    device.name,
-                    device.id,
-                    message,
+                    device.name, device.id, failure["message"]
                 )
             )
-        self._communication_failures[device.id] = message
+            failure["logged"] = True
+
+    def _flushCommunicationNotifications(self):
+        now = time.monotonic()
+        delay = self._notification_delay()
+        for device_id, failure in list(self._communication_failures.items()):
+            if now - failure["started"] >= delay:
+                self._logCommunicationFailure(indigo.devices[device_id], failure)
+
+    def _communicationFailed(self, device, error):
+        failure = self._communication_failures.setdefault(device.id, {
+            "started": time.monotonic(), "message": "", "logged": False,
+        })
+        failure["message"] = str(error).strip()
+        if time.monotonic() - failure["started"] >= self._notification_delay():
+            self._logCommunicationFailure(device, failure)
         device.updateStateImageOnServer(indigo.kStateImageSel.SensorTripped)
         device.updateStateOnServer('device_online', value=False)
         device.setErrorStateOnServer("Communication failed")
 
 ################################################################################
     def _communicationRecovered(self, device):
-        previous_error = self._communication_failures.pop(device.id, None)
-        if previous_error is not None:
-            self.logger.info(
-                "RainMachine recovered: device='{}' id={}".format(
-                    device.name,
-                    device.id,
+        failure = self._communication_failures.pop(device.id, None)
+        if failure is not None:
+            if time.monotonic() - failure["started"] >= self._notification_delay():
+                self._logCommunicationFailure(device, failure)
+            if failure["logged"]:
+                self.logger.info(
+                    "RainMachine recovered: device='{}' id={}".format(
+                        device.name, device.id,
+                    )
                 )
-            )
         device.updateStateOnServer(
             'device_online', value=True, clearErrorState=True
         )
@@ -292,6 +340,7 @@ class Plugin(indigo.PluginBase):
         try:
             while True:
                 try:
+                    self._flushCommunicationNotifications()
                     if time.time() > self.next_update_programs:
                         asyncio.run(self.update())
                 except Exception:
